@@ -39,14 +39,14 @@ use time::OffsetDateTime;
 
 use super::ws::{WsMessage, WsResponse};
 use crate::protocol::core::parse_authorization;
-use crate::protocol::methods::tempo::session_method::deduct_from_channel;
+use crate::protocol::methods::tempo::session_method::{deduct_from_channel, ChannelStore};
 use crate::protocol::methods::tempo::session_receipt::SessionReceipt;
-use crate::protocol::traits::{ChargeMethod, SessionMethod};
+use crate::protocol::traits::{ChargeMethod, ErrorCode, SessionMethod};
 
 /// Options for [`ws_session`].
 pub struct WsSessionOptions<G> {
     /// Channel store for balance tracking.
-    pub store: Arc<dyn crate::protocol::methods::tempo::session_method::ChannelStore>,
+    pub store: Arc<dyn ChannelStore>,
     /// Channel ID (hex).
     pub channel_id: String,
     /// Challenge ID for the receipt.
@@ -87,7 +87,7 @@ where
         loop {
             match deduct_from_channel(&*store, &channel_id, tick_cost).await {
                 Ok(_state) => break,
-                Err(e) if e.code == Some(crate::protocol::traits::ErrorCode::ChannelClosed) => {
+                Err(e) if e.code == Some(ErrorCode::ChannelClosed) => {
                     // Channel is finalized/closing — no voucher can reopen it, so
                     // emit the final receipt and stop instead of waiting forever.
                     send_receipt(sender, &*store, &channel_id, &challenge_id).await;
@@ -130,11 +130,11 @@ where
 /// Send the final session receipt for `channel_id`, if the channel still exists.
 async fn send_receipt<S>(
     sender: &mut S,
-    store: &dyn crate::protocol::methods::tempo::session_method::ChannelStore,
+    store: &dyn ChannelStore,
     channel_id: &str,
     challenge_id: &str,
 ) where
-    S: futures_util::Sink<String, Error = Box<dyn std::error::Error + Send + Sync>> + Send + Unpin,
+    S: futures_util::Sink<String> + Unpin,
 {
     if let Ok(Some(ch)) = store.get_channel(channel_id).await {
         let timestamp = OffsetDateTime::now_utc()
@@ -186,9 +186,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::methods::tempo::session_method::{
-        ChannelState, ChannelStore, InMemoryChannelStore,
-    };
+    use crate::protocol::methods::tempo::session_method::{ChannelState, InMemoryChannelStore};
 
     fn test_channel_state(channel_id: &str, voucher_amount: u128, deposit: u128) -> ChannelState {
         ChannelState {
